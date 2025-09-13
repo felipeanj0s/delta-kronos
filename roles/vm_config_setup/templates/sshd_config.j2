@@ -1,0 +1,53 @@
+# ==============================================================================
+# GT Monitoramento 2025
+# Template de Configuração do OpenSSH Server (sshd_config.j2)
+# Versão: Habilitado para login com senha e porta customizada.
+# ==============================================================================
+
+# --- Parâmetros de Conexão ---
+Port {{ ssh_port }}
+Protocol 2
+
+# --- Configurações de Autenticação ---
+
+# Desabilita o login direto como 'root' (prática de segurança essencial)
+PermitRootLogin no
+
+# Permite a autenticação por senha para usuários normais, como solicitado.
+PasswordAuthentication yes
+
+# Desabilitado pois PasswordAuthentication está ativo.
+ChallengeResponseAuthentication no
+
+# Garante que senhas vazias não sejam permitidas.
+PermitEmptyPasswords no
+
+# --- Chaves de Autenticação e Host ---
+HostKey /etc/ssh/ssh_host_rsa_key
+# HostKey /etc/ssh/ssh_host_dsa_key # Obsoleto e inseguro
+HostKey /etc/ssh/ssh_host_ecdsa_key
+HostKey /etc/ssh/ssh_host_ed225519_key
+AuthorizedKeysFile .ssh/authorized_keys
+
+# --- Parâmetros de Sessão e Log ---
+UsePrivilegeSeparation yes
+SyslogFacility AUTH
+LogLevel INFO
+LoginGraceTime {{ ssh_login_grace_time | default(60) }}
+StrictModes yes
+IgnoreRhosts yes
+X11Forwarding yes
+PrintMotd no
+PrintLastLog yes
+TCPKeepAlive yes
+
+# --- Banner de aviso ---
+Banner /etc/issue.net
+
+# --- Ambiente e subsistemas ---
+AcceptEnv LANG LC_*
+Subsystem sftp /usr/lib/openssh/sftp-server
+UsePAM yes
+
+# --- Inclusão de configurações adicionais ---
+Include /etc/ssh/sshd_config.d/*.conf

@@ -1,0 +1,54 @@
+#!/bin/bash
+# ======================================================================
+# Script de Geração de Mensagem do Dia (MOTD) - Versão Final
+# ======================================================================
+
+# --- Função para checar status de serviços ---
+get_status() {
+    local service="$1"
+    # Checa se o serviço existe
+    if ! systemctl list-unit-files --type=service | grep -q "^${service}.service"; then
+        echo "nao instalado"
+        return
+    fi
+
+    # Checa se o serviço está ativo
+    if systemctl is-active --quiet "$service"; then
+        echo "ativo"
+    else
+        echo "inativo"
+    fi
+}
+
+# --- Coleta de Informações ---
+HOSTNAME=$(hostname)
+OS_VERSION=$(grep PRETTY_NAME /etc/os-release | cut -d'=' -f2 | tr -d '"')
+IPV4_ADDR=$(hostname -I | awk '{print $1}')
+UPTIME=$(uptime -p | sed 's/up //')
+USERS=$(who | wc -l)
+# Comando robusto para memória, calculando a partir dos valores em KiB
+MEMORY=$(free | awk '/^Mem:/ {printf "%.0f MiB / %.0f MiB (%.0f%%)", $3/1024, $2/1024, $3/$2*100}')
+DISK_ROOT=$(df -h / | awk 'NR==2 {print $3 " / " $2 " (" $5 ")"}')
+LAST_LOGIN=$(last -n 1 -w | head -n 1)
+
+# --- Status dos Serviços ---
+ZABBIX_AGENT_STATUS=$(get_status "zabbix-agent2")
+ZABBIX_PROXY_STATUS=$(get_status "zabbix-proxy")
+
+# --- Exibição ---
+echo ""
+printf "%-22s: %s\n" "Servidor" "$HOSTNAME"
+printf "%-22s: %s\n" "Sistema Operacional" "$OS_VERSION"
+printf "%-22s: %s\n" "Endereco IPv4" "$IPV4_ADDR"
+printf "%-22s: %s\n" "Tempo de Atividade" "$UPTIME"
+printf "%-22s: %s\n" "Usuarios Conectados" "$USERS"
+printf "%-22s: %s\n" "Uso de Memoria" "$MEMORY"
+printf "%-22s: %s\n" "Uso de Disco (/)" "$DISK_ROOT"
+echo ""
+printf "%-22s: %s\n" "Status Zabbix Agent" "$ZABBIX_AGENT_STATUS"
+printf "%-22s: %s\n" "Status Zabbix Proxy" "$ZABBIX_PROXY_STATUS"
+echo ""
+echo "Ultimo login: $LAST_LOGIN"
+echo ""
+
+exit 0

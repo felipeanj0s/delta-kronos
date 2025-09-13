@@ -1,0 +1,175 @@
+---
+# ==============================================================================
+# Arquivo: roles/vm_config_setup/tasks/main.yml
+# Descrição: Realiza a instalação e configuração de medidas de segurança de rede.
+# ==============================================================================
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Pré-requisitos de rede (ifupdown2 preferível; fallback para ifupdown)
+# ──────────────────────────────────────────────────────────────────────────────
+- name: Rede | Instalar ifupdown2 (preferível)
+  become: yes
+  ansible.builtin.apt:
+    name: ifupdown2
+    state: present
+    update_cache: yes
+
+# (Opcional) fallback, útil caso seu repositório não tenha ifupdown2
+- name: Rede | Garantir ifupdown clássico (fallback)
+  become: yes
+  ansible.builtin.apt:
+    name: ifupdown
+    state: present
+  when: false  # habilite se realmente precisar do fallback
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Verificação de conectividade
+# ──────────────────────────────────────────────────────────────────────────────
+- name: Conectividade | Normalizar variáveis (IPv6/dns/gw podem não existir)
+  ansible.builtin.set_fact:
+    _ipv6_addr_safe: "{{ (pop_network_ipv6_address | default('')) | regex_replace('/.*$', '') }}"
+    _ipv6_gw_safe: "{{ pop_network_ipv6_gateway | default('') }}"
+    _dns_list_safe: "{{ pop_network_dns_list | default([]) }}"
+
+- name: Conectividade | Construir lista de IPs para teste
+  ansible.builtin.set_fact:
+    ips_para_testar: >-
+      {{
+        [
+          zabbix_server_ip,
+          _ipv6_addr_safe,
+          pop_network_ipv4_gateway | default(''),
+          _ipv6_gw_safe
+        ]
+        | select('ne','') | list
+        + (_dns_list_safe | select('ne','') | list)
+      }}
+
+- name: Conectividade | Ping em destinos relevantes
+  ansible.builtin.command: "ping -c 3 {{ item }}"
+  loop: "{{ ips_para_testar }}"
+  register: ping_results
+  changed_when: false
+  ignore_errors: true
+
+- name: Conectividade | Mostrar resultados
+  ansible.builtin.debug:
+    msg: "Teste para {{ item.item }}: {{ 'Sucesso' if item.rc == 0 else 'Falha' }}"
+  loop: "{{ ping_results.results }}"
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Hostname e /etc/hosts
+# ──────────────────────────────────────────────────────────────────────────────
+- name: Hostname | Definir nome da máquina
+  become: yes
+  ansible.builtin.hostname:
+    name: "{{ zabbix_proxy_hostname }}"
+
+- name: Hostname | Garantir entrada em /etc/hosts
+  become: yes
+  ansible.builtin.lineinfile:
+    path: /etc/hosts
+    regexp: '^127\.0\.1\.1'
+    line: "127.0.1.1 {{ zabbix_proxy_hostname }}"
+    state: present
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Rede (Debian) via /etc/network/interfaces
+# ──────────────────────────────────────────────────────────────────────────────
+- name: Rede | Aplicar template /etc/network/interfaces
+  become: yes
+  ansible.builtin.template:
+    src: interfaces.j2
+    dest: /etc/network/interfaces
+    owner: root
+    group: root
+    mode: '0644'
+  notify: Reiniciar Networking
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Banner e MOTD
+# ──────────────────────────────────────────────────────────────────────────────
+- name: Banner | /etc/issue.net
+  become: yes
+  ansible.builtin.template:
+    src: issue.net.j2
+    dest: "/etc/issue.net"
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: MOTD | Script informativo
+  become: yes
+  ansible.builtin.template:
+    src: "motd_info.j2"
+    dest: "/etc/update-motd.d/99-ansible-info"
+    owner: root
+    group: root
+    mode: "0755"
+  notify: Atualizar MOTD
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Segurança (UFW / Fail2ban / SSH)
+# ──────────────────────────────────────────────────────────────────────────────
+- name: Segurança | Instalar UFW e Fail2Ban
+  become: yes
+  ansible.builtin.apt:
+    name:
+      - ufw
+      - fail2ban
+    state: present
+    update_cache: yes
+
+- name: SSH | Aplicar sshd_config
+  become: yes
+  ansible.builtin.template:
+    src: sshd_config.j2
+    dest: /etc/ssh/sshd_config
+    owner: root
+    group: root
+    mode: '0600'
+  notify: Reiniciar SSH
+
+- name: SSH | Validar configuração
+  become: yes
+  ansible.builtin.command: sshd -t
+  changed_when: false
+
+# ──────────────────────────────────────────────────────────────────────────────
+# UFW (Inbound)
+# ──────────────────────────────────────────────────────────────────────────────
+- name: UFW | Regras de entrada
+  become: yes
+  ansible.builtin.ufw:
+    rule: "{{ item.0.rule }}"
+    from_ip: "{{ item.1 }}"
+    to_ip: "{{ item.0.to | default(omit) }}"
+    port: "{{ item.0.port | default(omit) }}"
+    proto: "{{ item.0.proto | default(omit) }}"
+    comment: "{{ item.0.comment | default(omit) }}"
+  loop: "{{ (ufw_rules | default([])) | subelements('from') }}"
+  when: item.0.direction is not defined or item.0.direction == 'in'
+
+# ──────────────────────────────────────────────────────────────────────────────
+# UFW (Outbound)
+# ──────────────────────────────────────────────────────────────────────────────
+- name: UFW | Regras de saída
+  become: yes
+  ansible.builtin.ufw:
+    rule: "{{ item.0.rule }}"
+    direction: "{{ item.0.direction }}"
+    from_ip: "{{ item.1 }}"
+    to_ip: "{{ item.0.to | default(omit) }}"
+    port: "{{ item.0.port | default(omit) }}"
+    proto: "{{ item.0.proto | default(omit) }}"
+    comment: "{{ item.0.comment | default(omit) }}"
+  loop: "{{ (ufw_rules | default([])) | subelements('from') }}"
+  when: item.0.direction is defined and item.0.direction == 'out'
+
+# ──────────────────────────────────────────────────────────────────────────────
+# UFW | Habilitar
+# ──────────────────────────────────────────────────────────────────────────────
+- name: UFW | Habilitar firewall
+  become: yes
+  ansible.builtin.ufw:
+    state: enabled

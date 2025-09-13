@@ -1,0 +1,31 @@
+---
+# ==============================================================================
+# Handlers da Role 'vm_config_setup'
+# Arquivo: roles/vm_config_setup/handlers/main.yml
+# ==============================================================================
+
+# Reiniciar serviço de rede (Debian ifupdown)
+- name: Reiniciar Networking
+  ansible.builtin.systemd:
+    name: networking
+    state: restarted
+  ignore_errors: true
+
+# Reiniciar serviço Fail2Ban
+- name: Reiniciar Fail2Ban
+  ansible.builtin.systemd:
+    name: fail2ban
+    state: restarted
+    enabled: true
+
+# Reiniciar serviço SSH
+- name: Reiniciar SSH
+  ansible.builtin.systemd:
+    name: sshd
+    state: restarted
+    enabled: true
+
+# Atualizar MOTD
+- name: Atualizar MOTD
+  ansible.builtin.command: /usr/bin/run-parts --regex '^[0-9]+-.*' /etc/update-motd.d/
+  changed_when: false

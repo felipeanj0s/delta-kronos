@@ -1,0 +1,85 @@
+# ===================================================================
+# Inventário Ansible - hosts
+# Cada host é único, mesmo que seja localhost, para separar variáveis
+# ===================================================================
+
+[ac]
+ac_localhost ansible_connection=local
+
+[al]
+al_localhost ansible_connection=local
+
+[ap]
+ap_localhost ansible_connection=local
+
+[am]
+am_localhost ansible_connection=local
+
+[ba]
+ba_localhost ansible_connection=local
+
+[ce]
+ce_localhost ansible_connection=local
+
+[df]
+df_localhost ansible_connection=local
+
+[es]
+es_localhost ansible_connection=local
+
+[go]
+go_localhost ansible_connection=local
+
+[ma]
+ma_localhost ansible_connection=local
+
+[mt]
+mt_localhost ansible_connection=local
+
+[ms]
+ms_localhost ansible_connection=local
+
+[mg]
+mg_localhost ansible_connection=local
+
+[pa]
+pa_localhost ansible_connection=local
+
+[pb]
+pb_localhost ansible_connection=local
+
+[pr]
+pr_localhost ansible_connection=local
+
+[pe]
+pe_localhost ansible_connection=local
+
+[pi]
+pi_localhost ansible_connection=local
+
+[rj]
+rj_localhost ansible_connection=local
+
+[rn]
+rn_localhost ansible_connection=local
+
+[rs]
+rs_localhost ansible_connection=local
+
+[ro]
+ro_localhost ansible_connection=local
+
+[rr]
+rr_localhost ansible_connection=local
+
+[sc]
+sc_localhost ansible_connection=local
+
+[sp]
+sp_localhost ansible_connection=local
+
+[se]
+se_localhost ansible_connection=local
+
+[to]
+to_localhost ansible_connection=local

@@ -1,0 +1,16 @@
+---
+# ==============================================================================
+# Task para a Role 'load_vars'
+# Arquivo: roles/load_vars/tasks/main.yml
+# Descrição: Garante que as variáveis sejam carregadas corretamente.
+# ==============================================================================
+- name: Setup | Determinar a localidade a partir do grupo do inventário
+  ansible.builtin.set_fact:
+    # Pega o primeiro grupo ao qual o host pertence (ex: 'ce', 'rj', 'sp')
+    # Esta variável 'group_names' é fornecida automaticamente pelo Ansible.
+    location_code: "{{ group_names[0] }}"
+
+- name: Setup | Carregar variáveis específicas da localidade
+  ansible.builtin.include_vars:
+    file: "group_vars/pops_configs/{{ location_code }}.yml"
+  ignore_errors: no   # Se o arquivo (ex: group_vars/ce.yml) não existir, o playbook vai parar com um erro.
