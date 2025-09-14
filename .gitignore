@@ -4,3 +4,8 @@ ansible/.ssh/
 .vault
 __pycache__/
 *.retry
+
+.env
+*.psk
+*.log
+*.pyc

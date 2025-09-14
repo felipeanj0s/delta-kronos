@@ -20,7 +20,6 @@ concurrency:
 
 jobs:
   detect:
-    # Runner SELF-HOSTED Debian 12
     runs-on: [self-hosted, linux, x64, debian-12]
     timeout-minutes: 15
     outputs:
@@ -47,7 +46,6 @@ jobs:
           NEW=ansible/inventory/hosts.yml
           git show HEAD^:$NEW > "$OLD" 2>/dev/null || cp "$NEW" "$OLD"
 
-          # Escolhe automaticamente o script válido (suporta typo 'detect_inventoy.py')
           if [ -f scripts/ci/detect_inventory_changes.py ]; then
             python3 scripts/ci/detect_inventory_changes.py "$OLD" "$NEW" --out "$GITHUB_OUTPUT"
           elif [ -f scripts/ci/detect_inventoy.py ]; then
@@ -60,7 +58,6 @@ jobs:
   provision:
     needs: detect
     if: needs.detect.outputs.count != '0'
-    # Runner SELF-HOSTED Debian 12
     runs-on: [self-hosted, linux, x64, debian-12]
     timeout-minutes: 45
     strategy:
@@ -75,29 +72,30 @@ jobs:
       DK_ANSIBLE_ARTIFACTS_DIR: ${{ runner.temp }}/ansible_artifacts
       ANSIBLE_STDOUT_CALLBACK: yaml
       ANSIBLE_FORCE_COLOR: '1'
+      ANSIBLE_SSH_ARGS: -F ansible/.ssh/config
     steps:
       - uses: actions/checkout@v4
 
       - name: Install Ansible deps (Debian 12)
         run: |
           sudo apt-get update
-          # ansible-core + ferramentas
           sudo apt-get install -y ansible-core openssh-client jq python3 python3-pip
           pip3 install --upgrade pip
-          pip3 install requests pyyaml
+          # 👉 inclui ansible-runner (e libs usadas pelos scripts)
+          pip3 install ansible-runner requests pyyaml
 
-      - name: Write SSH key
+      - name: Ensure SSH key (config + perms)
         env:
           SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
         run: |
-          chmod +x scripts/ci/write_ssh_key.sh
-          bash scripts/ci/write_ssh_key.sh
+          chmod +x scripts/ci/ensure_ssh_key.sh
+          ./scripts/ci/ensure_ssh_key.sh
 
       - name: Extract host facts from inventory
         id: inv
         run: |
           python3 - <<'PY' >> "$GITHUB_OUTPUT"
-          import yaml, sys
+          import yaml
           host = "${{ matrix.host }}"
           with open("ansible/inventory/hosts.yml","r") as f:
               inv = yaml.safe_load(f)
@@ -109,10 +107,12 @@ jobs:
           print(f"zbx_proxy_name={zbx_proxy_name}")
           PY
 
-      - name: Prime known_hosts (ssh-keyscan)
+      - name: Prime known_hosts (opcional)
         run: |
-          mkdir -p ~/.ssh
-          ssh-keyscan -T 5 -H "${{ steps.inv.outputs.ansible_host }}" >> ~/.ssh/known_hosts
+          mkdir -p ansible/.ssh
+          touch ansible/.ssh/known_hosts
+          chmod 644 ansible/.ssh/known_hosts
+          ssh-keyscan -T 5 -H "${{ steps.inv.outputs.ansible_host }}" >> ansible/.ssh/known_hosts
 
       - name: Ensure zbx_api import (alias de zbx_apy se necessário)
         shell: bash
@@ -121,17 +121,12 @@ jobs:
             cp scripts/zbx_apy.py scripts/zbx_api.py
           fi
 
-      - name: Run Ansible (provision)
-        # Se você tem ansible.cfg custom em ansible/configs/ansible.cfg, mantenha a linha abaixo
+      - name: Run Ansible via ansible-runner (provision)
         env:
-          ANSIBLE_CONFIG: ansible/configs/ansible.cfg
+          ANSIBLE_VAULT_PASSWORD: ${{ secrets.ANSIBLE_VAULT_PASSWORD }}
+          DK_ANSIBLE_ARTIFACTS_DIR: ${{ env.DK_ANSIBLE_ARTIFACTS_DIR }}
         run: |
-          umask 077
-          echo "$ANSIBLE_VAULT_PASSWORD" > .vault && trap 'shred -u .vault' EXIT
-          export ANSIBLE_VAULT_PASSWORD_FILE=.vault
-          ansible-playbook -i ansible/inventory/hosts.yml ansible/playbooks/provision.yml \
-            -e ansible_artifacts_dir="$DK_ANSIBLE_ARTIFACTS_DIR" \
-            --limit "${{ matrix.host }}"
+          python3 scripts/run_playbook.py --playbook provision.yml --limit "${{ matrix.host }}"
 
       - name: Register in Zabbix (Proxy)
         if: ${{ matrix.group == 'proxies' }}
