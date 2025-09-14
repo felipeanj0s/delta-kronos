@@ -1,8 +1,0 @@
-# Enforce: Agent e Proxy devem ter o mesmo hostname?
-enforce_same_agent_proxy_hostname: true
-
-# Validar formato de 'location' (<namespace>_<id>)?
-validate_location_format: true
-
-# Regex de location (ex.: lab_ufc, as_angolacables, pop_ce, ce-pop-ufc)
-location_regex: '^[a-z][a-z0-9]{1,15}[_-][a-z0-9][a-z0-9_-]{1,30}$'

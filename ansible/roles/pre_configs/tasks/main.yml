@@ -1,17 +1,35 @@
----
-# 1) Location (opcional, mas recomendado para padronização/relatórios)
-- name: Preflight | Validar 'location'
-  ansible.builtin.assert:
-    that:
-      - location is defined
-      - location is match(location_regex)
-    fail_msg: >
-      'location' inválida. Use minúsculas/números/_/-, começando com letra,
-      no formato <namespace>_<id> (ex.: lab_ufc, as_angolacables, pop_ce).
-  when: validate_location_format | bool
 
-# 2) Rede mínima (agnóstico)
-- name: Preflight | Validar variáveis mínimas de rede
+---
+# roles/pre_configs/tasks/main.yml
+
+# 1) Normalizações
+- name: Garantir network_dns_list como lista
+  ansible.builtin.set_fact:
+    network_dns_list: "{{ [network_dns_list] if (network_dns_list is string) else (network_dns_list | default([])) }}"
+  when: network_dns_list is defined
+
+- name: Montar network_addresses sem vazios
+  ansible.builtin.set_fact:
+    network_addresses: >-
+      {{
+        [
+          network_ipv4_address | default(''),
+          network_ipv6_address | default('')
+        ] | reject('equalto','') | list
+      }}
+
+- name: Garantir zabbix_active_server_ips como lista
+  ansible.builtin.set_fact:
+    zabbix_active_server_ips: "{{ [zabbix_active_server_ips] if (zabbix_active_server_ips is string) else (zabbix_active_server_ips | default([])) }}"
+  when: zabbix_active_server_ips is defined
+
+- name: Derivar zabbix_proxy_ip se ausente
+  ansible.builtin.set_fact:
+    zabbix_proxy_ip: "{{ (network_ipv4_address | default(ansible_host ~ '/32')) | split('/') | first }}"
+  when: zabbix_proxy_ip is not defined
+
+# 2) Validações mínimas de rede
+- name: Validar variáveis mínimas de rede
   ansible.builtin.assert:
     that:
       - network_interface is defined
@@ -24,16 +42,20 @@
       network_interface, network_ipv4_address, network_ipv4_netmask,
       network_ipv4_gateway, network_dns_list (e IPv6 se usar).
 
-# 3) Agent: herdar hostname do Proxy, se ausente
-- name: Preflight | Definir zabbix_agent_hostname igual ao do proxy (se ausente)
+# 3) Hostnames Agent/Proxy
+- name: Herdar hostname do Agent a partir do Proxy (se ausente)
   ansible.builtin.set_fact:
     zabbix_agent_hostname: "{{ zabbix_proxy_hostname }}"
-  when: zabbix_agent_hostname is not defined
+  when:
+    - zabbix_agent_hostname is not defined
+    - zabbix_proxy_hostname is defined
 
-# 4) Enforce: Agent == Proxy
-- name: Preflight | Enforce Agent == Proxy
+- name: Enforce Agent == Proxy
   ansible.builtin.assert:
     that:
       - zabbix_agent_hostname == zabbix_proxy_hostname
     fail_msg: "zabbix_agent_hostname deve ser igual a zabbix_proxy_hostname."
-  when: enforce_same_agent_proxy_hostname | bool
+  when:
+    - (enforce_same_agent_proxy_hostname | default(true) | bool)
+    - zabbix_agent_hostname is defined
+    - zabbix_proxy_hostname is defined

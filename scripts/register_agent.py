@@ -2,8 +2,8 @@
 import os
 import json
 import pathlib
+from zbx_api import ensure_proxy   
 from zbx_api import ensure_host
-
 def _read_agent_psk_from_artifacts(name: str) -> str:
     # Prioridade: DK_ANSIBLE_ARTIFACTS_DIR (padrão: ansible_artifacts)
     base = os.getenv("DK_ANSIBLE_ARTIFACTS_DIR", "ansible_artifacts")

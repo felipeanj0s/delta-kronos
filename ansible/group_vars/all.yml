@@ -22,16 +22,28 @@ zabbix_agent_service_name: "zabbix-agent2"
 # ==============================================================================
 # Seção II: Configurações de Rede (agnóstico)
 # ==============================================================================
-network_addresses:
-  - "{{ network_ipv4_address | default('') }}"
-  - "{{ network_ipv6_address | default('') }}"
-network_nameservers: "{{ network_dns_list | default([]) }}"
-network_routes:
-  - to: default
-    via: "{{ network_ipv4_gateway | default('') }}"
-    metric: 50
-  - to: default
-    via: "{{ network_ipv6_gateway | default('') }}"
+# evita itens "" nas listas
+network_addresses: >-
+  {{
+    [
+      network_ipv4_address | default(''),
+      network_ipv6_address | default('')
+    ] | reject('equalto','') | list
+  }}
+
+network_nameservers: >-
+  {{ (network_dns_list | default([])) | reject('equalto','') | list }}
+
+# cria rotas default somente se houver gateway definido
+network_routes: >-
+  {{
+    [
+      (network_ipv4_gateway is defined and (network_ipv4_gateway | length) > 0)
+        | ternary({'to':'default','via':network_ipv4_gateway,'metric':50}, omit),
+      (network_ipv6_gateway is defined and (network_ipv6_gateway | length) > 0)
+        | ternary({'to':'default','via':network_ipv6_gateway}, omit)
+    ] | reject('equalto', omit) | list
+  }}
 
 # ==============================================================================
 # Seção III: Configurações do Zabbix Proxy
@@ -157,34 +169,23 @@ zabbix_agent_plugins_docker_timeout: 20
 # ==============================================================================
 # Seção V: Segurança (UFW / Fail2ban / SSH)
 # ==============================================================================
-
-# Senhas para vm_config_setup 
-vm_admin_user: "ger_adm"
-vm_admin_shell: "/bin/bash"
-vm_admin_groups: ["sudo"]
-vm_admin_password: ""   # deixe vazio p/ gerar automaticamente
-
-# Se vm_admin_password estiver vazio ⇒ a role gera uma senha forte via openssl rand -base64 24, cria o usuário e:
-# grava a senha em /root/.ger_adm.passwd (0600, só root), e salva uma cópia no runner
-# em artifacts/credentials/<inventory_hostname>.ger_adm.passwd (para você recuperar no CI).
-
 # Porta SSH padrão (usada em vm_config_setup e nas regras)
 ssh_port: 22222
 
-# Fail2Ban
-fail2ban_sshd_port: "{{ ssh_port }}"
-fail2ban_maxretry: 10
-fail2ban_findtime: 10m
-fail2ban_bantime: 24h
-fail2ban_ignore_ips:
-  - "127.0.0.1/8"
-  - "{{ network_ipv4_gateway | default('') }}"
-  - "{{ zabbix_active_server_ips }}"
-  - "{{ network_addresses }}"
+# Fail2Ban — montar lista final sem elementos vazios e sem listas-virarem-strings
+_fail2ban_ignore_sources: >-
+  {{
+    [
+      "127.0.0.1/8",
+      network_ipv4_gateway | default('')
+    ]
+    + (zabbix_active_server_ips | default([]))
+    + (network_addresses | default([]))
+  }}
+fail2ban_ignore_ips: "{{ _fail2ban_ignore_sources | reject('equalto','') | list }}"
 
-# UFW (mesmo formato)
+# UFW
 ufw_rules:
-  # SSH - Gateway
   - rule: allow
     from: ["{{ network_ipv4_gateway | default('') }}"]
     port: "{{ ssh_port }}"
@@ -192,7 +193,6 @@ ufw_rules:
     comment: "SSH - Gateway IPv4"
     direction: in
 
-  # SSH - Localidade
   - rule: allow
     from: "{{ network_addresses }}"
     port: "{{ ssh_port }}"
@@ -200,7 +200,6 @@ ufw_rules:
     comment: "SSH - IPs da localidade"
     direction: in
 
-  # Zabbix - Gateway
   - rule: allow
     from: ["{{ network_ipv4_gateway | default('') }}"]
     port: 10050
@@ -215,7 +214,6 @@ ufw_rules:
     comment: "Zabbix Proxy - Gateway"
     direction: in
 
-  # Zabbix - Active Servers
   - rule: allow
     from: "{{ zabbix_active_server_ips }}"
     port: 10050
