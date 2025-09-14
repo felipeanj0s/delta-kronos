@@ -1,0 +1,116 @@
+# arquivo: .github/workflows/git_runner_ci.yml
+name: Provision Delta-Kronos
+
+on:
+  push:
+    paths:
+      - 'ansible/inventory/hosts.yml'
+      - 'ansible/**/*.yml'
+      - 'ansible/**/*.j2'                 # ← gatilho para templates também
+      - 'scripts/**/*.py'
+      - '.github/workflows/git_runner_ci.yml'
+  workflow_dispatch:
+
+jobs:
+  detect:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.diff.outputs.matrix }}
+      count:  ${{ steps.diff.outputs.count }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Install Python deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3 python3-pip
+          pip3 install pyyaml
+
+      - name: Diff inventory (old vs new)
+        id: diff
+        shell: bash
+        run: |
+          set -e
+          OLD=/tmp/old_hosts.yml
+          NEW=ansible/inventory/hosts.yml
+          git show HEAD^:$NEW > "$OLD" 2>/dev/null || cp "$NEW" "$OLD"
+          python3 scripts/ci/detect_inventory_changes.py "$OLD" "$NEW" --out "$GITHUB_OUTPUT"
+
+  provision:
+    needs: detect
+    if: needs.detect.outputs.count != '0'
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include: ${{ fromJson(needs.detect.outputs.matrix) }}
+    env:
+      ANSIBLE_VAULT_PASSWORD: ${{ secrets.ANSIBLE_VAULT_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Ansible deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3 python3-pip openssh-client jq
+          pip3 install ansible requests pyyaml
+
+      - name: Write SSH key
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+        run: |
+          chmod +x scripts/ci/write_ssh_key.sh
+          bash scripts/ci/write_ssh_key.sh
+
+      - name: Set artifacts dir (runner temp)
+        run: echo "DK_ANSIBLE_ARTIFACTS_DIR=$RUNNER_TEMP/ansible_artifacts" >> $GITHUB_ENV
+
+      - name: Extract host facts from inventory
+        id: inv
+        run: |
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import yaml
+          host = "${{ matrix.host }}"
+          with open("ansible/inventory/hosts.yml","r") as f:
+              inv = yaml.safe_load(f)
+          proxies = inv.get("all",{}).get("children",{}).get("proxies",{})
+          data = (proxies.get("hosts") or {}).get(host) or {}
+          ansible_host   = data.get("ansible_host","")
+          zbx_proxy_name = data.get("zabbix_proxy_hostname", host)
+          print(f"ansible_host={ansible_host}")
+          print(f"zbx_proxy_name={zbx_proxy_name}")
+          PY
+
+      - name: Run Ansible (provision)
+        env:
+          ANSIBLE_CONFIG: ansible/configs/ansible.cfg
+        run: |
+          umask 077
+          echo "$ANSIBLE_VAULT_PASSWORD" > .vault && trap 'shred -u .vault' EXIT
+          export ANSIBLE_VAULT_PASSWORD_FILE=.vault
+          ansible-playbook -i ansible/inventory/hosts.yml ansible/playbooks/provision.yml \
+            --limit "${{ matrix.host }}"
+
+      - name: Register in Zabbix (Proxy)
+        if: ${{ matrix.group == 'proxies' }}
+        env:
+          ZABBIX_URL:     ${{ secrets.ZABBIX_URL }}
+          ZABBIX_TOKEN:   ${{ secrets.ZABBIX_TOKEN }}
+          ZABBIX_VERIFY_SSL: ${{ secrets.ZABBIX_VERIFY_SSL }}    # opcional: "false" p/ lab
+          ZBX_PROXY_NAME: ${{ steps.inv.outputs.zbx_proxy_name }}
+          ZBX_PROXY_MODE: active
+          ZBX_PSK_ID:     ${{ steps.inv.outputs.zbx_proxy_name }}-psk
+        run: python3 scripts/register_proxy.py
+
+      - name: Register in Zabbix (Agent)
+        env:
+          ZABBIX_URL:        ${{ secrets.ZABBIX_URL }}
+          ZABBIX_TOKEN:      ${{ secrets.ZABBIX_TOKEN }}
+          ZABBIX_VERIFY_SSL: ${{ secrets.ZABBIX_VERIFY_SSL }}    # opcional
+          ZBX_PROXY_NAME:    ${{ steps.inv.outputs.zbx_proxy_name }}
+          ZBX_AGENT_NAME:    ${{ steps.inv.outputs.zbx_proxy_name }}
+          ZBX_AGENT_IP:      ${{ steps.inv.outputs.ansible_host }}
+          ZBX_AGENT_GROUPS:  '["Linux servers","Zabbix proxies"]'
+          ZBX_AGENT_TEMPLATES: '["Linux by Zabbix agent"]'
+        run: python3 scripts/register_agent.py

@@ -1,0 +1,258 @@
+---
+# ==============================================================================
+# Arquivo: roles/vm_config_setup/tasks/main.yml
+# Descrição: Instalação e configuração de rede/segurança da VM (Debian 12).
+# ==============================================================================
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Pré-requisitos de rede (ifupdown2 preferível; fallback para ifupdown)
+# ──────────────────────────────────────────────────────────────────────────────
+- name: Rede | Instalar ifupdown2 (preferível)
+  become: yes
+  ansible.builtin.apt:
+    name: ifupdown2
+    state: present
+    update_cache: yes
+
+# (Opcional) fallback, útil caso seu repositório não tenha ifupdown2
+- name: Rede | Garantir ifupdown clássico (fallback)
+  become: yes
+  ansible.builtin.apt:
+    name: ifupdown
+    state: present
+  when: false  # habilite se realmente precisar do fallback
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Verificação de conectividade
+# ──────────────────────────────────────────────────────────────────────────────
+- name: Conectividade | Normalizar variáveis (IPv6/dns/gw podem não existir)
+  ansible.builtin.set_fact:
+    _ipv6_addr_safe: "{{ (network_ipv6_address | default('')) | regex_replace('/.*$', '') }}"
+    _ipv6_gw_safe: "{{ network_ipv6_gateway | default('') }}"
+    _dns_list_safe: "{{ network_dns_list | default([]) }}"
+
+- name: Conectividade | Construir lista de IPs para teste
+  ansible.builtin.set_fact:
+    ips_para_testar: >-
+      {{
+        [
+          zabbix_server_ip,
+          _ipv6_addr_safe,
+          network_ipv4_gateway | default(''),
+          _ipv6_gw_safe
+        ]
+        | select('ne','') | list
+        + (_dns_list_safe | select('ne','') | list)
+      }}
+
+- name: Conectividade | Ping em destinos relevantes
+  ansible.builtin.command: "ping -c 3 {{ item }}"
+  loop: "{{ ips_para_testar }}"
+  register: ping_results
+  changed_when: false
+  ignore_errors: true
+
+- name: Conectividade | Mostrar resultados
+  ansible.builtin.debug:
+    msg: "Teste para {{ item.item }}: {{ 'Sucesso' if item.rc == 0 else 'Falha' }}"
+  loop: "{{ ping_results.results }}"
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Hostname e /etc/hosts
+# ──────────────────────────────────────────────────────────────────────────────
+- name: Hostname | Definir nome da máquina
+  become: yes
+  ansible.builtin.hostname:
+    name: "{{ zabbix_proxy_hostname }}"
+
+- name: Hostname | Garantir entrada em /etc/hosts
+  become: yes
+  ansible.builtin.lineinfile:
+    path: /etc/hosts
+    regexp: '^127\.0\.1\.1'
+    line: "127.0.1.1 {{ zabbix_proxy_hostname }}"
+    state: present
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Rede (Debian) via /etc/network/interfaces
+# ──────────────────────────────────────────────────────────────────────────────
+- name: Rede | Aplicar template /etc/network/interfaces
+  become: yes
+  ansible.builtin.template:
+    src: interfaces.j2
+    dest: /etc/network/interfaces
+    owner: root
+    group: root
+    mode: '0644'
+  notify: Reiniciar Networking
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Banner e MOTD
+# ──────────────────────────────────────────────────────────────────────────────
+- name: Banner | /etc/issue.net
+  become: yes
+  ansible.builtin.template:
+    src: issue.net.j2
+    dest: "/etc/issue.net"
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: MOTD | Script informativo
+  become: yes
+  ansible.builtin.template:
+    src: "motd_info.j2"
+    dest: "/etc/update-motd.d/99-ansible-info"
+    owner: root
+    group: root
+    mode: "0755"
+  notify: Atualizar MOTD
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Segurança (UFW / Fail2ban / SSH)
+# ──────────────────────────────────────────────────────────────────────────────
+- name: Segurança | Instalar UFW e Fail2Ban
+  become: yes
+  ansible.builtin.apt:
+    name:
+      - ufw
+      - fail2ban
+    state: present
+    update_cache: yes
+
+- name: SSH | Aplicar sshd_config
+  become: yes
+  ansible.builtin.template:
+    src: sshd_config.j2
+    dest: /etc/ssh/sshd_config
+    owner: root
+    group: root
+    mode: '0600'
+  notify: Reiniciar SSH
+
+- name: SSH | Validar configuração
+  become: yes
+  ansible.builtin.command: sshd -t
+  changed_when: false
+
+# ──────────────────────────────────────────────────────────────────────────────
+# UFW (Inbound)
+# ──────────────────────────────────────────────────────────────────────────────
+- name: UFW | Regras de entrada
+  become: yes
+  ansible.builtin.ufw:
+    rule: "{{ item.0.rule }}"
+    direction: in
+    src: "{{ item.1 }}"
+    dest: "{{ item.0.to | default(omit) }}"
+    port: "{{ item.0.port | default(omit) }}"
+    proto: "{{ item.0.proto | default(omit) }}"
+    comment: "{{ item.0.comment | default(omit) }}"
+  loop: "{{ (ufw_rules | default([])) | subelements('from') }}"
+  when: item.0.direction is not defined or item.0.direction == 'in'
+
+# ──────────────────────────────────────────────────────────────────────────────
+# UFW (Outbound)
+# ──────────────────────────────────────────────────────────────────────────────
+- name: UFW | Regras de saída
+  become: yes
+  ansible.builtin.ufw:
+    rule: "{{ item.0.rule }}"
+    direction: out
+    src: "{{ item.1 }}"
+    dest: "{{ item.0.to | default(omit) }}"
+    port: "{{ item.0.port | default(omit) }}"
+    proto: "{{ item.0.proto | default(omit) }}"
+    comment: "{{ item.0.comment | default(omit) }}"
+  loop: "{{ (ufw_rules | default([])) | subelements('from') }}"
+  when: item.0.direction is defined and item.0.direction == 'out'
+
+# ──────────────────────────────────────────────────────────────────────────────
+# UFW | Habilitar
+# ──────────────────────────────────────────────────────────────────────────────
+- name: UFW | Habilitar firewall
+  become: yes
+  ansible.builtin.ufw:
+    state: enabled
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Usuário administrativo (vm_admin_user) com senha forte
+# ──────────────────────────────────────────────────────────────────────────────
+
+# Se a senha vier definida (texto puro), gerar HASH sha512 de maneira segura
+- name: Admin | Gerar hash da senha definida (quando vm_admin_password fornecida)
+  ansible.builtin.set_fact:
+    _vm_admin_password_plain: "{{ vm_admin_password }}"
+    _vm_admin_password_hash: "{{ vm_admin_password | password_hash('sha512') }}"
+  when: vm_admin_password is defined and (vm_admin_password | length) > 0
+  no_log: true
+
+# Se NÃO vier senha definida, gerar automaticamente (forte) na 1ª execução
+- name: Admin | Verificar se já existe arquivo de senha gerada (evita regerar)
+  ansible.builtin.stat:
+    path: "/root/.{{ vm_admin_user }}.passwd"
+  register: _admin_pw_file
+  become: yes
+
+- name: Admin | Gerar senha aleatória (apenas se não existir)
+  ansible.builtin.command: "openssl rand -base64 24"
+  register: _admin_pw_gen
+  when: not _admin_pw_file.stat.exists and (vm_admin_password | length) == 0
+  changed_when: true
+  no_log: true
+
+- name: Admin | Salvar senha gerada em /root (somente root lê)
+  ansible.builtin.copy:
+    dest: "/root/.{{ vm_admin_user }}.passwd"
+    content: "{{ _admin_pw_gen.stdout | trim }}"
+    owner: root
+    group: root
+    mode: "0600"
+  when: _admin_pw_gen is defined and _admin_pw_gen.stdout is defined
+  no_log: true
+  become: yes
+
+- name: Admin | Ler senha (gerada ou já existente) se vm_admin_password não foi definida
+  ansible.builtin.slurp:
+    src: "/root/.{{ vm_admin_user }}.passwd"
+  register: _admin_pw_slurp
+  when: (vm_admin_password | length) == 0
+  no_log: true
+  become: yes
+
+- name: Admin | Definir hash da senha (caso gerada automaticamente)
+  ansible.builtin.set_fact:
+    _vm_admin_password_plain: "{{ (_admin_pw_slurp.content | b64decode) | trim }}"
+    _vm_admin_password_hash: "{{ ((_admin_pw_slurp.content | b64decode) | trim) | password_hash('sha512') }}"
+  when: (vm_admin_password | length) == 0
+  no_log: true
+
+# Exporta a senha para artifacts (no runner) — NUNCA no host remoto
+- name: Admin | Exportar senha para artifacts do pipeline (local)
+  delegate_to: localhost
+  copy:
+    dest: "artifacts/credentials/{{ inventory_hostname }}.{{ vm_admin_user }}.passwd"
+    content: "{{ _vm_admin_password_plain }}"
+    mode: "0600"
+  when: _vm_admin_password_plain is defined
+  no_log: true
+
+- name: Admin | Criar usuário administrativo
+  ansible.builtin.user:
+    name: "{{ vm_admin_user }}"
+    shell: "{{ vm_admin_shell }}"
+    groups: "{{ vm_admin_groups | join(',') }}"
+    append: true
+    create_home: true
+    password: "{{ _vm_admin_password_hash }}"
+    update_password: on_create
+  become: yes
+
+- name: Admin | Preparar ~/.ssh (futuro uso de chaves)
+  ansible.builtin.file:
+    path: "/home/{{ vm_admin_user }}/.ssh"
+    state: directory
+    owner: "{{ vm_admin_user }}"
+    group: "{{ vm_admin_user }}"
+    mode: "0700"
+  become: yes

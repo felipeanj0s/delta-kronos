@@ -1,0 +1,30 @@
+# ==============================================================================
+# Template de Configuração de Rede - Debian 12
+# Arquivo: roles/net_security/templates/interfaces.j2
+# VERSÃO CORRIGIDA
+# ==============================================================================
+
+source /etc/network/interfaces.d/*
+
+# A interface de loopback
+auto lo
+iface lo inet loopback
+
+# A interface de rede primária
+auto {{ network_interface }}
+
+# Configuração IPv4
+iface {{ network_interface }} inet static
+  # Extrai apenas o IP da variável principal (ex: "192.168.0.17")
+  address {{ network_ipv4_address.split('/')[0] }}
+  # Usa a nova variável para a máscara de rede
+  netmask {{ network_ipv4_netmask }}
+  gateway {{ network_ipv4_gateway }}
+  dns-nameservers {{ network_dns_list | join(' ') }}
+
+{# --- Configuração IPv6 Condicional --- #}
+{% if network_ipv6_address is defined and network_ipv6_address %}
+iface {{ network_interface }} inet6 static
+  address {{ network_ipv6_address.split('/')[0] }}
+  gateway {{ network_ipv6_gateway }}
+{% endif %}

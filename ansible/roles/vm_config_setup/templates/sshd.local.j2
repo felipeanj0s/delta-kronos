@@ -1,0 +1,31 @@
+# ==============================================================================
+# GT Monitoramento 2025
+# Template de Configuração do Fail2Ban para SSH (sshd.local.j2)
+# ==============================================================================
+
+[sshd]
+
+# Ativa a jail
+enabled = true
+
+# Porta configurada no Ansible
+port = {{ fail2ban_sshd_port }}
+
+# Filtro padrão para SSH
+filter = sshd
+
+# Caminho do log de autenticação
+logpath = /var/log/auth.log
+
+# Número máximo de tentativas antes de banir
+maxretry = {{ fail2ban_maxretry }}
+
+# Janela de tempo em que as tentativas são contadas
+findtime = {{ fail2ban_findtime }}
+
+# Tempo de banimento
+bantime = {{ fail2ban_bantime }}
+
+# Lista de IPs confiáveis que nunca serão banidos
+# Inclui localhost, Zabbix Server, gateway da rede, IPs do POP e servidores DNS
+ignoreip = 127.0.0.1/8 {{ zabbix_server_ip }} {{ network_ipv4_gateway }} {{ network_addresses | join(' ') }} {{ network_dns_list | join(' ') }}

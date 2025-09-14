@@ -1,0 +1,111 @@
+---
+# ======================================================================
+# Zabbix Proxy — Debian 12
+
+# ======================================================================
+
+# --- Repositório Zabbix ---
+- name: Repo | Verificar se o repositório Zabbix já está instalado
+  ansible.builtin.stat:
+    path: "/etc/apt/sources.list.d/zabbix.list"
+  register: zbx_repo_status
+  changed_when: false
+
+- name: Repo | Baixar o pacote do repositório Zabbix (se necessário)
+  ansible.builtin.get_url:
+    url: "{{ zabbix_repo_url }}"
+    dest: "/tmp/{{ zabbix_repo_file }}"
+    mode: "0644"
+  when: not zbx_repo_status.stat.exists
+
+- name: Repo | Instalar pacote do repositório Zabbix (se necessário)
+  ansible.builtin.apt:
+    deb: "/tmp/{{ zabbix_repo_file }}"
+    state: present
+  when: not zbx_repo_status.stat.exists
+
+- name: Repo | Atualizar cache de pacotes
+  ansible.builtin.apt:
+    update_cache: yes
+
+# --- Pacotes básicos ---
+- name: Pacotes | Garantir utilitários presentes
+  ansible.builtin.apt:
+    name:
+      - openssl
+      - jq
+    state: present
+
+# --- Proxy (sqlite3) ---
+- name: Pacotes | Instalar Zabbix Proxy (SQLite)
+  ansible.builtin.apt:
+    name: "{{ zabbix_proxy_package }}"
+    state: present
+
+# --- Diretórios necessários ---
+- name: Diretórios | Criar diretórios do Proxy/PSK
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: zabbix
+    group: zabbix
+    mode: "0755"
+  loop:
+    - "{{ zabbix_proxy_dbname | dirname }}"
+    - "{{ zabbix_proxy_logfile | dirname }}"
+    - "{{ zabbix_proxy_socket_dir }}"
+    - "{{ zabbix_proxy_psk_file | dirname }}"
+
+# --- PSK ---
+- name: PSK | Verificar se o arquivo existe
+  ansible.builtin.stat:
+    path: "{{ zabbix_proxy_psk_file }}"
+  register: proxy_psk_file_status
+  changed_when: false
+
+- name: PSK | Gerar em memória (somente se não existir)
+  ansible.builtin.command: openssl rand -hex 32
+  register: proxy_psk_value_raw
+  when: not proxy_psk_file_status.stat.exists
+  changed_when: true
+  no_log: true
+
+- name: PSK | Criar arquivo (somente se não existir)
+  ansible.builtin.copy:
+    content: "{{ proxy_psk_value_raw.stdout | trim }}"
+    dest: "{{ zabbix_proxy_psk_file }}"
+    owner: zabbix
+    group: zabbix
+    mode: "0600"
+  when: not proxy_psk_file_status.stat.exists
+  no_log: true
+
+- name: PSK | Ler do disco (garantido que existe)
+  ansible.builtin.slurp:
+    src: "{{ zabbix_proxy_psk_file }}"
+  register: proxy_psk_file_content
+  changed_when: false
+  no_log: true
+
+- name: Fatos | Expor PSK/Identity para uso posterior (pipeline)
+  ansible.builtin.set_fact:
+    proxy_api_psk_identity: "{{ zabbix_proxy_psk_identity }}"
+    proxy_api_psk_key: "{{ (proxy_psk_file_content.content | b64decode) | trim }}"
+    cacheable: true
+  no_log: true
+
+# --- Configuração e serviço ---
+- name: Config | Aplicar zabbix_proxy.conf
+  ansible.builtin.template:
+    src: "zabbix_proxy.conf.j2"
+    dest: "/etc/zabbix/zabbix_proxy.conf"
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Reiniciar Zabbix Proxy
+
+- name: Serviço | Habilitar e iniciar
+  ansible.builtin.systemd:
+    name: zabbix-proxy
+    enabled: yes
+    state: started

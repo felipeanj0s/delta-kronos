@@ -1,0 +1,13 @@
+---
+- name: Provisionar base da VM + Zabbix Proxy e Agent2 (Debian 12)
+  hosts: proxies
+  become: true
+  gather_facts: true
+  any_errors_fatal: true
+
+  roles:
+    - role: pre_configs        # carrega informações repassadas no inventário
+    - role: vm_config_setup    # configura rede, SSH, UFW, Fail2Ban, MOTD...
+    - role: zabbix_proxy       # instala e configura Zabbix Proxy
+    - role: zabbix_agent       # instala e configura Zabbix Agent
+    - role: artifacts          # cria dirs locais e salva PSK p/ pipeline

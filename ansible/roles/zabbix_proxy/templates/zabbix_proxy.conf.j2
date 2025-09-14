@@ -1,0 +1,75 @@
+############# Zabbix Proxy (Debian 12) — Gerado pelo Delta-Kronos #############
+
+# Modo: 0=active, 1=passive (vindo do seu all.yml)
+ProxyMode={{ zabbix_proxy_mode | default(0) }}
+
+# Identidade
+Hostname={{ zabbix_proxy_hostname }}
+
+# Conexão ao Server
+Server={{ zabbix_server_ip }}
+ServerPort={{ zabbix_server_port_for_proxy | default(10051) }}
+
+# Rede / Processo
+ListenPort={{ zabbix_proxy_listenport | default(10051) }}
+SourceIP={{ (network_ipv4_address | default(ansible_default_ipv4.address ~ '/32')) | split('/') | first }}
+PidFile={{ zabbix_proxy_pidfile }}
+SocketDir={{ zabbix_proxy_socket_dir }}
+
+# Processos (puxa do all.yml se existir)
+{% if zabbix_proxy_startpollers is defined %}StartPollers={{ zabbix_proxy_startpollers }}{% endif %}
+{% if zabbix_proxy_startpreprocessors is defined %}StartPreprocessors={{ zabbix_proxy_startpreprocessors }}{% endif %}
+{% if zabbix_proxy_startpollersunreachable is defined %}StartPollersUnreachable={{ zabbix_proxy_startpollersunreachable }}{% endif %}
+{% if zabbix_proxy_starttrappers is defined %}StartTrappers={{ zabbix_proxy_starttrappers }}{% endif %}
+{% if zabbix_proxy_startpingers is defined %}StartPingers={{ zabbix_proxy_startpingers }}{% endif %}
+{% if zabbix_proxy_startdiscoverers is defined %}StartDiscoverers={{ zabbix_proxy_startdiscoverers }}{% endif %}
+{% if zabbix_proxy_starthttpollers is defined %}StartHTTPPollers={{ zabbix_proxy_starthttpollers }}{% endif %}
+{% if zabbix_proxy_startsnmppollers is defined %}StartSNMPPollers={{ zabbix_proxy_startsnmppollers }}{% endif %}
+{% if zabbix_proxy_startagentpollers is defined %}StartAgentPollers={{ zabbix_proxy_startagentpollers }}{% endif %}
+{% if zabbix_proxy_startdbsyncers is defined %}StartDBSyncers={{ zabbix_proxy_startdbsyncers }}{% endif %}
+{% if zabbix_proxy_startipmipollers is defined %}StartIPMIPollers={{ zabbix_proxy_startipmipollers }}{% endif %}
+
+# Cache
+{% if zabbix_proxy_cachesize is defined %}CacheSize={{ zabbix_proxy_cachesize }}{% endif %}
+{% if zabbix_proxy_historycachesize is defined %}HistoryCacheSize={{ zabbix_proxy_historycachesize }}{% endif %}
+{% if zabbix_proxy_historyindexcachesize is defined %}HistoryIndexCacheSize={{ zabbix_proxy_historyindexcachesize }}{% endif %}
+
+# TLS — mapeia números do all.yml para strings de conf
+{% set _tls_connect_num = (zabbix_proxy_tls_connect | default(1)) | int %}
+{% set _tls_accept_num  = (zabbix_proxy_tls_accept  | default(1)) | int %}
+
+TLSConnect={{ 'psk' if _tls_connect_num == 1 else 'cert' }}
+TLSAccept={% if _tls_accept_num == 1 -%}psk{% elif _tls_accept_num == 2 -%}cert{% elif _tls_accept_num == 3 -%}psk,cert{% elif _tls_accept_num == 4 -%}unencrypted{% else -%}psk{% endif %}
+TLSPSKIdentity={{ zabbix_proxy_psk_identity }}
+TLSPSKFile={{ zabbix_proxy_psk_file }}
+
+# Logs
+LogFile={{ zabbix_proxy_logfile }}
+LogType={{ zabbix_proxy_logtype }}
+LogFileSize={{ zabbix_proxy_logfile_size }}
+DebugLevel={{ zabbix_proxy_debug_level }}
+
+# Banco local (sqlite3)
+DBName={{ zabbix_proxy_dbname }}
+ProxyOfflineBuffer={{ zabbix_proxy_offline_buffer }}
+
+# Timers
+{% if zabbix_proxy_heartbeat_frequency is defined %}HeartbeatFrequency={{ zabbix_proxy_heartbeat_frequency }}{% endif %}
+{% if zabbix_proxy_config_frequency is defined %}ConfigFrequency={{ zabbix_proxy_config_frequency }}{% endif %}
+{% if zabbix_proxy_datasender_frequency is defined %}DataSenderFrequency={{ zabbix_proxy_datasender_frequency }}{% endif %}
+{% if zabbix_proxy_housekeeping_frequency is defined %}HousekeepingFrequency={{ zabbix_proxy_housekeeping_frequency }}{% endif %}
+{% if zabbix_proxy_timeout is defined %}Timeout={{ zabbix_proxy_timeout }}{% endif %}
+{% if zabbix_proxy_trappertimeout is defined %}TrapperTimeout={{ zabbix_proxy_trappertimeout }}{% endif %}
+{% if zabbix_proxy_unreachable_period is defined %}UnreachablePeriod={{ zabbix_proxy_unreachable_period }}{% endif %}
+{% if zabbix_proxy_unavailable_delay is defined %}UnavailableDelay={{ zabbix_proxy_unavailable_delay }}{% endif %}
+{% if zabbix_proxy_unreachable_delay is defined %}UnreachableDelay={{ zabbix_proxy_unreachable_delay }}{% endif %}
+
+# FPING
+{% if zabbix_proxy_fping_location is defined %}FpingLocation={{ zabbix_proxy_fping_location }}{% endif %}
+{% if zabbix_proxy_fping6_location is defined %}Fping6Location={{ zabbix_proxy_fping6_location }}{% endif %}
+
+# Compat
+{% if zabbix_proxy_allow_unsupported_db is defined %}AllowUnsupportedDBVersions={{ zabbix_proxy_allow_unsupported_db }}{% endif %}
+
+# SSH (se usar em userparams etc.)
+{% if zabbix_proxy_ssh_key_location is defined %}SSHKeyLocation={{ zabbix_proxy_ssh_key_location }}{% endif %}

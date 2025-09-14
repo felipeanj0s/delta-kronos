@@ -1,0 +1,39 @@
+---
+# 1) Location (opcional, mas recomendado para padronização/relatórios)
+- name: Preflight | Validar 'location'
+  ansible.builtin.assert:
+    that:
+      - location is defined
+      - location is match(location_regex)
+    fail_msg: >
+      'location' inválida. Use minúsculas/números/_/-, começando com letra,
+      no formato <namespace>_<id> (ex.: lab_ufc, as_angolacables, pop_ce).
+  when: validate_location_format | bool
+
+# 2) Rede mínima (agnóstico)
+- name: Preflight | Validar variáveis mínimas de rede
+  ansible.builtin.assert:
+    that:
+      - network_interface is defined
+      - network_ipv4_address is defined
+      - network_ipv4_netmask is defined
+      - network_ipv4_gateway is defined
+      - network_dns_list is defined
+    fail_msg: >
+      Faltam variáveis de rede neste host. Defina:
+      network_interface, network_ipv4_address, network_ipv4_netmask,
+      network_ipv4_gateway, network_dns_list (e IPv6 se usar).
+
+# 3) Agent: herdar hostname do Proxy, se ausente
+- name: Preflight | Definir zabbix_agent_hostname igual ao do proxy (se ausente)
+  ansible.builtin.set_fact:
+    zabbix_agent_hostname: "{{ zabbix_proxy_hostname }}"
+  when: zabbix_agent_hostname is not defined
+
+# 4) Enforce: Agent == Proxy
+- name: Preflight | Enforce Agent == Proxy
+  ansible.builtin.assert:
+    that:
+      - zabbix_agent_hostname == zabbix_proxy_hostname
+    fail_msg: "zabbix_agent_hostname deve ser igual a zabbix_proxy_hostname."
+  when: enforce_same_agent_proxy_hostname | bool

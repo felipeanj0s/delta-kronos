@@ -1,0 +1,89 @@
+---
+# ======================================================================
+# Zabbix Agent 2 — Debian 12 (
+# Repo já deve estar instalado pelo role do proxy; ainda assim,
+# garantimos a presença via zabbix-release se necessário.
+# ======================================================================
+
+- name: Repo | Garantir zabbix-release (caso role do proxy não tenha rodado)
+  ansible.builtin.shell: |
+    set -e
+    dpkg -l | grep -q zabbix-release || (wget -O /tmp/{{ zabbix_repo_file }} {{ zabbix_repo_url }} && dpkg -i /tmp/{{ zabbix_repo_file }} && apt update)
+  args:
+    executable: /bin/bash
+
+- name: Pacotes | Instalar Zabbix Agent2
+  ansible.builtin.apt:
+    name: "{{ zabbix_agent_package }}"
+    state: present
+    update_cache: yes
+
+- name: Diretórios | /run/zabbix
+  ansible.builtin.file:
+    path: /run/zabbix
+    state: directory
+    owner: zabbix
+    group: zabbix
+    mode: "0755"
+
+- name: Diretórios | PSK do Agent
+  ansible.builtin.file:
+    path: "{{ zabbix_agent_psk_file | dirname }}"
+    state: directory
+    owner: zabbix
+    group: zabbix
+    mode: "0755"
+
+# --- PSK idempotente ---
+- name: PSK | Verificar se existe
+  ansible.builtin.stat:
+    path: "{{ zabbix_agent_psk_file }}"
+  register: agent_psk_file_status
+  changed_when: false
+
+- name: PSK | Gerar (se não existir)
+  ansible.builtin.command: openssl rand -hex 32
+  register: agent_psk_value
+  when: not agent_psk_file_status.stat.exists
+  changed_when: true
+  no_log: true
+
+- name: PSK | Salvar em disco (se não existir)
+  ansible.builtin.copy:
+    content: "{{ agent_psk_value.stdout | trim }}"
+    dest: "{{ zabbix_agent_psk_file }}"
+    owner: zabbix
+    group: zabbix
+    mode: "0600"
+  when: not agent_psk_file_status.stat.exists
+  no_log: true
+
+- name: PSK | Ler do disco
+  ansible.builtin.slurp:
+    src: "{{ zabbix_agent_psk_file }}"
+  register: agent_psk_file_content
+  changed_when: false
+  no_log: true
+
+- name: Fatos | Expor PSK do Agent (se precisar)
+  ansible.builtin.set_fact:
+    agent_psk_key: "{{ (agent_psk_file_content.content | b64decode) | trim }}"
+    cacheable: true
+  no_log: true
+
+# --- Config e Serviço ---
+- name: Config | Aplicar zabbix_agent2.conf
+  ansible.builtin.template:
+    src: "zabbix_agent2.conf.j2"
+    dest: "/etc/zabbix/zabbix_agent2.conf"
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Reiniciar Zabbix Agent
+
+- name: Serviço | Habilitar e iniciar
+  ansible.builtin.systemd:
+    name: "{{ zabbix_agent_service_name }}"
+    enabled: yes
+    state: started
+    daemon_reload: yes

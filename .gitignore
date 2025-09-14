@@ -1,0 +1,6 @@
+ansible_artifacts/
+artifacts/
+ansible/.ssh/
+.vault
+__pycache__/
+*.retry

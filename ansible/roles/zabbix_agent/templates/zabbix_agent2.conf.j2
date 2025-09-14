@@ -1,0 +1,35 @@
+############# Zabbix Agent 2 (Debian 12) #############
+
+### GENERAL
+PidFile={{ zabbix_agent_pidfile }}
+LogFile={{ zabbix_agent_logfile }}
+LogType={{ zabbix_agent_logtype }}
+LogFileSize={{ zabbix_agent_logfile_size }}
+DebugLevel={{ zabbix_agent_debug_level }}
+SourceIP={{ (zabbix_agent_source_ip | default(ansible_default_ipv4.address)) }}
+
+### PASSIVE CHECKS
+ListenPort={{ zabbix_agent_listenport }}
+Server={{ zabbix_server_ip }}
+
+### ACTIVE CHECKS
+ServerActive={{ zabbix_agent_serveractive_list | join(',') }}
+Hostname={{ zabbix_agent_hostname }}
+RefreshActiveChecks={{ zabbix_agent_refresh_active_checks }}
+BufferSend={{ zabbix_agent_buffer_send }}
+BufferSize={{ zabbix_agent_buffer_size }}
+
+### ADVANCED
+Include={{ zabbix_agent_include_dir }}
+ControlSocket={{ zabbix_agent_control_socket }}
+
+### TLS
+TLSConnect={{ zabbix_agent_tls_connect }}
+TLSAccept={{ zabbix_agent_tls_accept }}
+TLSPSKIdentity={{ zabbix_agent_psk_identity }}
+TLSPSKFile={{ zabbix_agent_psk_file }}
+
+### PLUGINS
+Plugins.Log.MaxLinesPerSecond={{ zabbix_agent_plugins_log_max_lines }}
+Plugins.Docker.Endpoint={{ zabbix_agent_plugins_docker_endpoint }}
+Plugins.Docker.Timeout={{ zabbix_agent_plugins_docker_timeout }}
