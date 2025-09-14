@@ -1,8 +1,4 @@
-
----
-# roles/pre_configs/tasks/main.yml
-
-# 1) Normalizações
+# Normalizações
 - name: Garantir network_dns_list como lista
   ansible.builtin.set_fact:
     network_dns_list: "{{ [network_dns_list] if (network_dns_list is string) else (network_dns_list | default([])) }}"
@@ -28,7 +24,7 @@
     zabbix_proxy_ip: "{{ (network_ipv4_address | default(ansible_host ~ '/32')) | split('/') | first }}"
   when: zabbix_proxy_ip is not defined
 
-# 2) Validações mínimas de rede
+# Validações mínimas de rede
 - name: Validar variáveis mínimas de rede
   ansible.builtin.assert:
     that:
@@ -42,7 +38,7 @@
       network_interface, network_ipv4_address, network_ipv4_netmask,
       network_ipv4_gateway, network_dns_list (e IPv6 se usar).
 
-# 3) Hostnames Agent/Proxy
+# Hostnames Agent/Proxy coerentes
 - name: Herdar hostname do Agent a partir do Proxy (se ausente)
   ansible.builtin.set_fact:
     zabbix_agent_hostname: "{{ zabbix_proxy_hostname }}"

@@ -6,14 +6,23 @@ on:
     paths:
       - 'ansible/inventory/hosts.yml'
       - 'ansible/**/*.yml'
-      - 'ansible/**/*.j2'                 # ← gatilho para templates também
+      - 'ansible/**/*.j2'
       - 'scripts/**/*.py'
       - '.github/workflows/git_runner_ci.yml'
   workflow_dispatch:
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   detect:
-    runs-on: ubuntu-latest
+    # Runner SELF-HOSTED Debian 12
+    runs-on: [self-hosted, linux, x64, debian-12]
+    timeout-minutes: 15
     outputs:
       matrix: ${{ steps.diff.outputs.matrix }}
       count:  ${{ steps.diff.outputs.count }}
@@ -22,39 +31,60 @@ jobs:
         with:
           fetch-depth: 2
 
-      - name: Install Python deps
+      - name: Install Python deps (Debian 12)
         run: |
           sudo apt-get update
           sudo apt-get install -y python3 python3-pip
+          pip3 install --upgrade pip
           pip3 install pyyaml
 
       - name: Diff inventory (old vs new)
         id: diff
         shell: bash
         run: |
-          set -e
+          set -euo pipefail
           OLD=/tmp/old_hosts.yml
           NEW=ansible/inventory/hosts.yml
           git show HEAD^:$NEW > "$OLD" 2>/dev/null || cp "$NEW" "$OLD"
-          python3 scripts/ci/detect_inventory_changes.py "$OLD" "$NEW" --out "$GITHUB_OUTPUT"
+
+          # Escolhe automaticamente o script válido (suporta typo 'detect_inventoy.py')
+          if [ -f scripts/ci/detect_inventory_changes.py ]; then
+            python3 scripts/ci/detect_inventory_changes.py "$OLD" "$NEW" --out "$GITHUB_OUTPUT"
+          elif [ -f scripts/ci/detect_inventoy.py ]; then
+            python3 scripts/ci/detect_inventoy.py "$OLD" "$NEW" --out "$GITHUB_OUTPUT"
+          else
+            echo "matrix=[]" >> "$GITHUB_OUTPUT"
+            echo "count=0" >> "$GITHUB_OUTPUT"
+          fi
 
   provision:
     needs: detect
     if: needs.detect.outputs.count != '0'
-    runs-on: ubuntu-latest
+    # Runner SELF-HOSTED Debian 12
+    runs-on: [self-hosted, linux, x64, debian-12]
+    timeout-minutes: 45
     strategy:
+      fail-fast: false
       matrix:
         include: ${{ fromJson(needs.detect.outputs.matrix) }}
     env:
       ANSIBLE_VAULT_PASSWORD: ${{ secrets.ANSIBLE_VAULT_PASSWORD }}
+      ZABBIX_URL:            ${{ secrets.ZABBIX_URL }}
+      ZABBIX_TOKEN:          ${{ secrets.ZABBIX_TOKEN }}
+      ZABBIX_VERIFY_SSL:     ${{ secrets.ZABBIX_VERIFY_SSL || 'true' }}
+      DK_ANSIBLE_ARTIFACTS_DIR: ${{ runner.temp }}/ansible_artifacts
+      ANSIBLE_STDOUT_CALLBACK: yaml
+      ANSIBLE_FORCE_COLOR: '1'
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Ansible deps
+      - name: Install Ansible deps (Debian 12)
         run: |
           sudo apt-get update
-          sudo apt-get install -y python3 python3-pip openssh-client jq
-          pip3 install ansible requests pyyaml
+          # ansible-core + ferramentas
+          sudo apt-get install -y ansible-core openssh-client jq python3 python3-pip
+          pip3 install --upgrade pip
+          pip3 install requests pyyaml
 
       - name: Write SSH key
         env:
@@ -63,14 +93,11 @@ jobs:
           chmod +x scripts/ci/write_ssh_key.sh
           bash scripts/ci/write_ssh_key.sh
 
-      - name: Set artifacts dir (runner temp)
-        run: echo "DK_ANSIBLE_ARTIFACTS_DIR=$RUNNER_TEMP/ansible_artifacts" >> $GITHUB_ENV
-
       - name: Extract host facts from inventory
         id: inv
         run: |
           python3 - <<'PY' >> "$GITHUB_OUTPUT"
-          import yaml
+          import yaml, sys
           host = "${{ matrix.host }}"
           with open("ansible/inventory/hosts.yml","r") as f:
               inv = yaml.safe_load(f)
@@ -82,7 +109,20 @@ jobs:
           print(f"zbx_proxy_name={zbx_proxy_name}")
           PY
 
+      - name: Prime known_hosts (ssh-keyscan)
+        run: |
+          mkdir -p ~/.ssh
+          ssh-keyscan -T 5 -H "${{ steps.inv.outputs.ansible_host }}" >> ~/.ssh/known_hosts
+
+      - name: Ensure zbx_api import (alias de zbx_apy se necessário)
+        shell: bash
+        run: |
+          if [ ! -f scripts/zbx_api.py ] && [ -f scripts/zbx_apy.py ]; then
+            cp scripts/zbx_apy.py scripts/zbx_api.py
+          fi
+
       - name: Run Ansible (provision)
+        # Se você tem ansible.cfg custom em ansible/configs/ansible.cfg, mantenha a linha abaixo
         env:
           ANSIBLE_CONFIG: ansible/configs/ansible.cfg
         run: |
@@ -90,27 +130,28 @@ jobs:
           echo "$ANSIBLE_VAULT_PASSWORD" > .vault && trap 'shred -u .vault' EXIT
           export ANSIBLE_VAULT_PASSWORD_FILE=.vault
           ansible-playbook -i ansible/inventory/hosts.yml ansible/playbooks/provision.yml \
+            -e ansible_artifacts_dir="$DK_ANSIBLE_ARTIFACTS_DIR" \
             --limit "${{ matrix.host }}"
 
       - name: Register in Zabbix (Proxy)
         if: ${{ matrix.group == 'proxies' }}
         env:
-          ZABBIX_URL:     ${{ secrets.ZABBIX_URL }}
-          ZABBIX_TOKEN:   ${{ secrets.ZABBIX_TOKEN }}
-          ZABBIX_VERIFY_SSL: ${{ secrets.ZABBIX_VERIFY_SSL }}    # opcional: "false" p/ lab
           ZBX_PROXY_NAME: ${{ steps.inv.outputs.zbx_proxy_name }}
           ZBX_PROXY_MODE: active
-          ZBX_PSK_ID:     ${{ steps.inv.outputs.zbx_proxy_name }}-psk
         run: python3 scripts/register_proxy.py
 
       - name: Register in Zabbix (Agent)
         env:
-          ZABBIX_URL:        ${{ secrets.ZABBIX_URL }}
-          ZABBIX_TOKEN:      ${{ secrets.ZABBIX_TOKEN }}
-          ZABBIX_VERIFY_SSL: ${{ secrets.ZABBIX_VERIFY_SSL }}    # opcional
           ZBX_PROXY_NAME:    ${{ steps.inv.outputs.zbx_proxy_name }}
           ZBX_AGENT_NAME:    ${{ steps.inv.outputs.zbx_proxy_name }}
           ZBX_AGENT_IP:      ${{ steps.inv.outputs.ansible_host }}
           ZBX_AGENT_GROUPS:  '["Linux servers","Zabbix proxies"]'
           ZBX_AGENT_TEMPLATES: '["Linux by Zabbix agent"]'
         run: python3 scripts/register_agent.py
+
+      - name: Upload artifacts (PSKs/credenciais do runner)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ansible_artifacts-${{ matrix.host }}
+          path: ${{ env.DK_ANSIBLE_ARTIFACTS_DIR }}/
